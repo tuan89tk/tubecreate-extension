@@ -382,12 +382,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const lastTime = current.lastActionTime || now;
           const diff = now - lastTime;
           
-          // If delay > 1s, record a wait command first
-          if (diff > 1000) {
+          // If delay > 100ms, record a wait command first
+          console.log('[Recorder] Diff:', diff);
+          if (diff > 100) {
              cmds.push({
                  action: 'wait',
                  params: { duration: diff },
-                 description: `Wait ${Math.round(diff/1000)}s`
+                 description: `Wait ${Math.round(diff/100)/10}s`
              });
           }
           
