@@ -167,7 +167,22 @@ async function doEvaluate(script) {
 }
 
 async function doScroll(x, y) {
-  window.scrollBy(x, y);
+  // Use smooth scroll behavior
+  const targetX = x || 0;
+  const targetY = y || 0;
+  
+  // Smooth scroll using scrollTo with behavior option
+  window.scrollTo({
+    top: targetY,
+    left: targetX,
+    behavior: 'smooth'
+  });
+  
+  // Wait for scroll to complete (estimated time based on distance)
+  const distance = Math.abs(targetY - window.scrollY) + Math.abs(targetX - window.scrollX);
+  const scrollDuration = Math.min(Math.max(distance / 2, 300), 1500); // 300ms to 1500ms
+  await new Promise(r => setTimeout(r, scrollDuration));
+  
   return { success: true, result: `Scrolled to ${window.scrollX}, ${window.scrollY}` };
 }
 
