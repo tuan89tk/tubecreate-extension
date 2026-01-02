@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>TubeCreate Browser Controller</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🎬 TubeCreate</h1>
+        <p class="subtitle">Browser Controller</p>
+      </div>
+
+      <div class="token-section">
+        <label>Extension Token</label>
+        <div class="token-display">
+          <input type="text" id="token" readonly />
+          <button id="copyToken" title="Copy Token">📋</button>
+          <button id="refreshToken" title="New Token">🔄</button>
+        </div>
+      </div>
+
+      <div class="status-section">
+        <div class="status-indicator">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText">Disconnected</span>
+        </div>
+      </div>
+
+      <div class="server-section">
+        <label>API Server URL</label>
+        <input
+          type="text"
+          id="apiUrl"
+          placeholder="http://localhost:5295/api/v1/browser"
+        />
+      </div>
+
+      <div class="actions">
+        <button id="connectBtn" class="btn primary">Connect</button>
+        <button id="disconnectBtn" class="btn secondary" style="display: none">
+          Disconnect
+        </button>
+      </div>
+
+      <div class="recorder-section" style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
+        <label>Macro Recorder</label>
+        <div class="recorder-controls" style="display: flex; gap: 10px; margin-bottom: 10px;">
+          <button id="recordBtn" class="btn danger" style="flex: 1;">🔴 Record</button>
+          <button id="stopBtn" class="btn secondary" style="flex: 1; display: none;">⏹ Stop</button>
+        </div>
+        <textarea id="jsonOutput" rows="5" readonly placeholder="Recorded JSON will appear here..." style="width: 100%; background: #1a1a1a; color: #0f0; border: 1px solid #333; border-radius: 4px; font-family: monospace; font-size: 11px; resize: vertical;"></textarea>
+      </div>
+
+      <div class="footer">
+        <small>v1.0.0</small>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
