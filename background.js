@@ -53,28 +53,35 @@ async function init() {
   chrome.contextMenus.create({
     id: "pick-parent",
     title: "TubeCreate: Pick Selector",
-    contexts: ["all"]
+    contexts: ["all", "selection"]
   });
 
   chrome.contextMenus.create({
     id: "pick-css",
     parentId: "pick-parent",
     title: "Copy CSS",
-    contexts: ["all"]
+    contexts: ["all", "selection"]
   });
 
   chrome.contextMenus.create({
     id: "pick-xpath",
     parentId: "pick-parent",
     title: "Copy XPath",
-    contexts: ["all"]
+    contexts: ["all", "selection"]
   });
 
   chrome.contextMenus.create({
     id: "pick-match",
     parentId: "pick-parent",
     title: "Copy Match (HTML)",
-    contexts: ["all"]
+    contexts: ["all", "selection"]
+  });
+
+  chrome.contextMenus.create({
+    id: "pick-parent-selector",
+    parentId: "pick-parent",
+    title: "Copy Parent CSS",
+    contexts: ["all", "selection"]
   });
 }
 
@@ -334,7 +341,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // --- Macro Recorder Messages ---
       case 'START_RECORDING':
-        await chrome.storage.local.set({ isRecording: true, recordedCommands: [] });
+        await chrome.storage.local.set({ 
+            isRecording: true, 
+            recordedCommands: [],
+            lastActionTime: Date.now() // Initialize timer
+        });
         // Broadcast to all tabs to enable listeners
         const tabsStart = await chrome.tabs.query({});
         for (const t of tabsStart) {
@@ -364,11 +375,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
         
       case 'RECORD_ACTION':
-        const current = await chrome.storage.local.get(['recordedCommands', 'isRecording']);
+        const current = await chrome.storage.local.get(['recordedCommands', 'isRecording', 'lastActionTime']);
         if (current.isRecording) {
           const cmds = current.recordedCommands || [];
+          const now = Date.now();
+          const lastTime = current.lastActionTime || now;
+          const diff = now - lastTime;
+          
+          // If delay > 1s, record a wait command first
+          if (diff > 1000) {
+             cmds.push({
+                 action: 'wait',
+                 params: { duration: diff },
+                 description: `Wait ${Math.round(diff/1000)}s`
+             });
+          }
+          
           cmds.push(message.command);
-          await chrome.storage.local.set({ recordedCommands: cmds });
+          await chrome.storage.local.set({ 
+              recordedCommands: cmds,
+              lastActionTime: now
+          });
         }
         break;
         

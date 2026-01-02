@@ -533,8 +533,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       // Determine what to return/copy
+      // Determine what to return/copy
       if (mode === 'xpath') resultSelector = xpath;
       else if (mode === 'match') resultSelector = match;
+      else if (mode === 'parent-selector') {
+        if (lastRightClickedElement.parentElement) {
+            resultSelector = generateSelector(lastRightClickedElement.parentElement);
+        } else {
+            resultSelector = cssSelector; // Fallback
+        }
+      }
       else resultSelector = cssSelector;
 
       // Copy to clipboard
