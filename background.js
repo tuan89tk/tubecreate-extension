@@ -129,8 +129,8 @@ async function init() {
     console.log('[Downloads] Started:', item.filename);
   });
 
-  // Expose download history getter
-  window.getDownloadHistory = () => downloadHistory;
+  // Download history is available via chrome.storage or message handler
+  // Service workers don't have window object
 }
 
 // Handle Context Menu Click
@@ -284,23 +284,128 @@ async function executeCommand(command) {
       return;
     }
     
-    // Skip chrome:// and other restricted URLs
-    if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
-      await sendResult(command.id, { success: false, error: 'Cannot run on chrome:// pages' });
-      return;
-    }
-    
     // Handle navigation separately (doesn't need content script)
     if (command.action === 'navigate') {
-      await chrome.tabs.update(tab.id, { url: command.params?.url });
+      const targetUrl = command.params?.url || command.selector;
+      console.log('[BrowserController] Navigating to:', targetUrl);
+      
+      // Update tab and wait for loading to complete
+      await chrome.tabs.update(tab.id, { url: targetUrl });
+      
+      // Wait for navigation to complete
+      await new Promise((resolve) => {
+        const listener = (tabId, changeInfo) => {
+          if (tabId === tab.id && changeInfo.status === 'complete') {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }, 30000);
+      });
+      
       await sendResult(command.id, { success: true, result: 'Navigated' });
       return;
     }
     
-    // Handle screenshot
+    // Handle screenshot (can run on any visible page)
     if (command.action === 'screenshot') {
-      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
-      await sendResult(command.id, { success: true, result: dataUrl });
+      try {
+        // Check if tab URL is restricted for screenshots
+        const currentTab = await chrome.tabs.get(tab.id);
+        if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
+          await sendResult(command.id, { success: false, error: 'Cannot capture chrome:// pages' });
+          return;
+        }
+        
+        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+        
+        // Save screenshot if save_path is provided
+        if (command.params?.save_path) {
+          // Convert data URL to blob
+          const response = await fetch(dataUrl);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          
+          reader.onloadend = async () => {
+            const base64data = reader.result.split(',')[1];
+            await sendResult(command.id, { 
+              success: true, 
+              result: dataUrl,
+              saved_to: command.params.save_path,
+              base64: base64data
+            });
+          };
+          reader.readAsDataURL(blob);
+        } else {
+          await sendResult(command.id, { success: true, result: dataUrl });
+        }
+        return;
+      } catch (error) {
+        await sendResult(command.id, { success: false, error: error.message });
+        return;
+      }
+    }
+    
+    // Handle wait action (doesn't need DOM access)
+    if (command.action === 'wait') {
+      const duration = command.params?.duration || 1000;
+      await new Promise(r => setTimeout(r, duration));
+      await sendResult(command.id, { success: true, result: `Waited ${duration}ms` });
+      return;
+    }
+    
+    // Handle random_scroll action
+    if (command.action === 'random_scroll') {
+      try {
+        const minScrolls = command.params?.min_scrolls || 1;
+        const maxScrolls = command.params?.max_scrolls || 3;
+        const scrollDelay = command.params?.scroll_delay || 500;
+        
+        const scrollCount = Math.floor(Math.random() * (maxScrolls - minScrolls + 1)) + minScrolls;
+        
+        console.log(`[BrowserController] Random scroll: ${scrollCount} times`);
+        
+        for (let i = 0; i < scrollCount; i++) {
+          // Random scroll amount between 200-800px
+          const scrollAmount = Math.floor(Math.random() * 600) + 200;
+          
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (amount) => {
+              window.scrollBy({
+                top: amount,
+                behavior: 'smooth'
+              });
+            },
+            args: [scrollAmount]
+          });
+          
+          // Wait between scrolls
+          if (i < scrollCount - 1) {
+            await new Promise(r => setTimeout(r, scrollDelay));
+          }
+        }
+        
+        await sendResult(command.id, { 
+          success: true, 
+          result: `Scrolled ${scrollCount} times` 
+        });
+        return;
+      } catch (error) {
+        await sendResult(command.id, { success: false, error: error.message });
+        return;
+      }
+    }
+    
+    // For other actions that need DOM access, check URL restrictions
+    if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
+      await sendResult(command.id, { success: false, error: 'Cannot run on chrome:// pages' });
       return;
     }
     
