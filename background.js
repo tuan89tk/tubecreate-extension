@@ -83,6 +83,54 @@ async function init() {
     title: "Copy Parent CSS",
     contexts: ["all", "selection"]
   });
+
+  // === Download Monitoring ===
+  let downloadHistory = [];
+  
+  // Load existing download history
+  const storedDownloads = await chrome.storage.local.get(['downloadHistory']);
+  if (storedDownloads.downloadHistory) {
+    downloadHistory = storedDownloads.downloadHistory;
+  }
+  
+  // Listen for download completion
+  chrome.downloads.onChanged.addListener((downloadDelta) => {
+    if (downloadDelta.state && downloadDelta.state.current === 'complete') {
+      chrome.downloads.search({ id: downloadDelta.id }, (results) => {
+        if (results.length > 0) {
+          const download = results[0];
+          const downloadInfo = {
+            id: download.id,
+            filename: download.filename,
+            url: download.url,
+            finalUrl: download.finalUrl || download.url,
+            fileSize: download.fileSize,
+            mime: download.mime,
+            startTime: download.startTime,
+            endTime: download.endTime,
+            timestamp: Date.now()
+          };
+          
+          downloadHistory.push(downloadInfo);
+          console.log('[Downloads] Completed:', downloadInfo.filename);
+          
+          // Keep only last 50
+          if (downloadHistory.length > 50) {
+            downloadHistory.shift();
+          }
+          
+          chrome.storage.local.set({ downloadHistory });
+        }
+      });
+    }
+  });
+  
+  chrome.downloads.onCreated.addListener((item) => {
+    console.log('[Downloads] Started:', item.filename);
+  });
+
+  // Expose download history getter
+  window.getDownloadHistory = () => downloadHistory;
 }
 
 // Handle Context Menu Click
@@ -398,6 +446,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               lastActionTime: now
           });
         }
+        break;
+        
+      case 'GET_DOWNLOADS':
+        const downloads = await chrome.storage.local.get(['downloadHistory']);
+        sendResponse({ 
+          success: true, 
+          downloads: downloads.downloadHistory || [] 
+        });
         break;
         
       default:
