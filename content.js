@@ -318,85 +318,184 @@ console.log('[BrowserController] Content script loaded');
 
 let isRecording = false;
 
+// Helper to check if a class name looks like a random hash (obfuscated)
+function isValidClass(cls) {
+  if (!cls) return false;
+  // Ignore common state classes
+  if (['active', 'hover', 'focus', 'selected', 'open', 'show', 'hide'].includes(cls)) return false;
+  // Ignore Angular/Framework internal classes
+  if (cls.startsWith('ng-') || cls.startsWith('css-')) return false;
+  
+  // Refined: MUI/Emotion generated classes often start with 'mui-' followed by random
+  // Real MUI classes are like MuiButton-root, Mui-selected (CamelCase)
+  // Bad: mui-ttq2zu (all lower/numbers)
+  if (cls.startsWith('mui-') && /^[a-z0-9-]+$/.test(cls) && !/[A-Z]/.test(cls)) {
+      return false; 
+  }
+
+  // Pattern for random hashes: 
+  // 1. Short (4-8 chars)
+  // 2. Mixed case letters, maybe numbers
+  // 3. No hyphens or underscores usually (frameworks often use kebab-case which is good)
+  // e.g. "xKcayf", "dMNVAe", "AcKKx"
+  const randomHashPattern = /^[a-zA-Z0-9]{4,8}$/;
+  
+  // If it matches hash pattern AND doesn't look like a word (no vowels or too random)
+  if (randomHashPattern.test(cls)) {
+      // Heuristic: mixed case is a strong indicator of React/StyledComponents hashes
+      const hasUpper = /[A-Z]/.test(cls);
+      const hasLower = /[a-z]/.test(cls);
+      const hasNumber = /[0-9]/.test(cls);
+      
+      if (hasUpper && hasLower) return false; // "xKcayf" -> bad
+      if (hasNumber && (hasUpper || hasLower)) return false; // "jss123" -> bad
+  }
+  
+  return true;
+}
+
+// Helper to escape XPath string
+function escapeXPathString(str) {
+    if (!str.includes("'")) return `'${str}'`;
+    if (!str.includes('"')) return `"${str}"`;
+    return "concat('" + str.replace(/'/g, "', \"'\", '") + "')";
+}
+
+function generateSmartXPath(element) {
+    // 1. Text Content (Strongest semantic signal)
+    // Only if text is reasonably short and meaningful
+    const text = element.innerText ? element.innerText.trim() : '';
+    const tagName = element.tagName.toLowerCase();
+    
+    if (text && text.length < 50 && text.length > 2) {
+        const safeText = escapeXPathString(text);
+        
+        // Exact match
+        const exactXpath = `//${tagName}[normalize-space()=${safeText}]`;
+        try {
+            const matches = document.evaluate(exactXpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+            if (matches.snapshotLength === 1) return exactXpath;
+        } catch(e) {}
+        
+        // Contains match (if exact fails or for buttons/links)
+        if (['a', 'button', 'span', 'h1', 'h2', 'h3', 'label'].includes(tagName)) {
+             const containsXpath = `//${tagName}[contains(normalize-space(), ${safeText})]`;
+             try {
+                const matches = document.evaluate(containsXpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                if (matches.snapshotLength === 1) return containsXpath;
+             } catch(e) {}
+        }
+    }
+    
+    // 2. Critical Attributes (that might not be unique globally but unique for tag)
+    // e.g. type="submit", name="email"
+    const attributes = ['name', 'placeholder', 'type', 'aria-label', 'title', 'role'];
+    for (const attr of attributes) {
+        if (element.hasAttribute(attr)) {
+            const val = element.getAttribute(attr);
+            if (val && val.length < 50) {
+                 const attrXpath = `//${tagName}[@${attr}=${escapeXPathString(val)}]`;
+                 try {
+                    const matches = document.evaluate(attrXpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                    if (matches.snapshotLength === 1) return attrXpath;
+                 } catch(e) {}
+            }
+        }
+    }
+    
+    // 3. Parent + Text/Attr (e.g. div[@class='row']//button[text()='Submit'])
+    // If the element itself isn't unique, maybe its relation to a close parent text is?
+    // (Skipped for now to avoid complexity/brittleness)
+    
+    return null;
+}
+
 // Generate robust selector
 function generateSelector(element) {
-  // 1. ID
-  if (element.id) {
+  // 0. Smart XPath (Prioritize Text/Semantics over random CSS classes)
+  // User asked for "workflow compatible logic" which heavily relies on XPaths for text.
+  // We check this BEFORE falling back to generic CSS chains.
+  const smartXpath = generateSmartXPath(element);
+  
+  // 1. ID - Only if it doesn't look random
+  const badIdPattern = /^(_|:|[0-9])|(:)|(_r_)/;
+  if (element.id && !badIdPattern.test(element.id) && !/^[a-zA-Z0-9]{4,10}$/.test(element.id)) { 
     return `#${element.id}`;
   }
   
-  // 2. Structural Attributes (name, placeholder, data-testid) - likely stable
-  const structAttributes = ['name', 'placeholder', 'data-testid', 'data-id', 'for'];
+  // If we have a semantic XPath, prefer it over generic CSS unless we find a specific Unique Attribute
+  
+  // 2. Structural Attributes (name, placeholder, data-testid)
+  const structAttributes = ['name', 'placeholder', 'data-testid', 'data-id', 'for', 'data-cy'];
   for (const attr of structAttributes) {
     if (element.hasAttribute(attr)) {
+      // CSS is cleaner for attributes
       return `${element.tagName.toLowerCase()}[${attr}="${element.getAttribute(attr)}"]`;
     }
   }
   
-  // 3. Class (priority over content attributes)
+  // 3. Class (filtered)
+  let bestClassSelector = null;
   if (element.className && typeof element.className === 'string' && element.className.trim() !== '') {
-    const classes = element.className.split(/\s+/).filter(c => c && !c.includes('active') && !c.includes('hover') && !c.includes('focus') && !c.includes('ng-'));
+    const classes = element.className.split(/\s+/).filter(isValidClass);
     if (classes.length > 0) {
-      // Try combinations of classes
       for (const cls of classes) {
         const classSelector = `.${cls}`;
+        // If unique class found, it's usually good. 
         if (document.querySelectorAll(classSelector).length === 1) {
           return classSelector;
         }
       }
-      
-      // Try closest parent with id + class
-      // ... (keep simple for now)
     }
   }
+  
+  // DECISION: If we have a Smart XPath (text based), and we didn't find a Unique ID or Unique Attribute or Unique Class...
+  // Use the XPath instead of falling down to "Content Attributes" or "Full Path Fallback"
+  if (smartXpath) {
+      return smartXpath;
+  }
 
-  // 4. Content Attributes (title, alt, aria-label) - use only if short and needed
-  const contentAttributes = ['title', 'alt', 'aria-label'];
+  // 4. Content Attributes (title, alt, aria-label)
+  const contentAttributes = ['title', 'alt', 'aria-label', 'role'];
   for (const attr of contentAttributes) {
     if (element.hasAttribute(attr)) {
       const val = element.getAttribute(attr);
-      if (val && val.length < 30) { // Only use if short
+      if (val && val.length < 30) { 
         return `${element.tagName.toLowerCase()}[${attr}="${val}"]`;
       }
     }
   }
   
-  // 5. XPath fallback (Text content) - only if very short
-  if (element.innerText && element.innerText.length < 20) {
-    const text = element.innerText.trim();
-    if (text) {
-      // Check if unique
-      const xpath = `//${element.tagName.toLowerCase()}[contains(text(), '${text.replace(/'/g, "\\'")}')]`;
-      try {
-        const count = document.evaluate(xpath, document, null, XPathResult.NUMBER_TYPE, null).numberValue; // count not easy in xpath 1.0 logic here without iteration
-        // Simplified: just return it if short
-        return xpath; 
-      } catch(e) {}
-    }
-  }
+  // 5. Full Path Fallback
+  // (Note: Removed Logic 5 old XPath fallback as it's covered by SmartXPath now)
   
-  // 6. Full Path Fallback (Structural position)
+  // 6. Full Path Fallback (Structural position with Valid Classes)
   let path = [];
   let curr = element;
   while (curr && curr.nodeType === Node.ELEMENT_NODE) {
     let selector = curr.nodeName.toLowerCase();
-    if (curr.id) {
+    
+    // Check ID against same rules + duplicates
+    if (curr.id && !badIdPattern.test(curr.id) && !/^[a-zA-Z0-9]{4,10}$/.test(curr.id)) {
       selector += '#' + curr.id;
       path.unshift(selector);
-      break; // Found an ID, good anchor
+      break; 
     } else {
       let sib = curr, nth = 1;
       while (sib = sib.previousElementSibling) {
         if (sib.nodeName.toLowerCase() == selector) nth++;
       }
-      if (nth != 1) selector += ":nth-of-type("+nth+")";
       
-      // Optimization: if class is unique among siblings, use it
+      // Add valid classes to current node selector to make it specific, BUT only if valid
       if (curr.className && typeof curr.className === 'string') {
-          const classes = curr.className.split(/\s+/).filter(c => c && !c.startsWith('ng-'));
+          const classes = curr.className.split(/\s+/).filter(isValidClass);
           if (classes.length > 0) {
-              selector += `.${classes[0]}`;
+              selector += `.${classes[0]}`; // Use first valid class
           }
+      }
+      
+      if (nth != 1 || !selector.includes('.')) {
+          selector += `:nth-of-type(${nth})`;
       }
     }
     path.unshift(selector);
@@ -442,7 +541,6 @@ function handleRecordInput(e) {
 }
 
 // Scroll recording with debounce
-// Scroll recording with debounce
 let scrollTimeout;
 let lastScrollParams = null; // Store last scroll to flush
 
@@ -466,12 +564,72 @@ function handleRecordScroll(e) {
   }, 500); // 500ms debounce (faster response)
 }
 
+function handleRecordKeydown(e) {
+  if (!isRecording) return;
+  
+  // Only handle Enter for now
+  if (e.key === 'Enter') {
+      const target = e.target;
+      
+      // If inside a form, try to record as submit click
+      if (target.form) {
+          const form = target.form;
+          // Find submit button (input[type=submit] or button[type=submit] or just button inside form)
+          let submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
+          
+          if (!submitBtn) {
+              // Try finding general button (often used as submit)
+              const buttons = form.querySelectorAll('button');
+              if (buttons.length > 0) {
+                  // Heuristic: Last button or one with "submit" text? 
+                  // Let's pick the first submit-type or fallback to first button if valid
+                  submitBtn = buttons[0]; 
+              }
+          }
+          
+          if (submitBtn) {
+              console.log('[Recorder] Enter key detected, recording as Submit Click on:', submitBtn);
+              const selector = generateSelector(submitBtn);
+              const isXPath = selector.startsWith('//');
+              
+              chrome.runtime.sendMessage({
+                type: 'RECORD_ACTION',
+                command: {
+                  action: 'click',
+                  selectorType: isXPath ? 'xpath' : 'css',
+                  selector: selector,
+                  description: 'Click Submit (via Enter)'
+                }
+              });
+              return; // Handled as click
+          }
+      }
+      
+      // Fallback: Record as key press (if we support it later, strictly user said "record as click submit")
+      // Since user specifically asked for "click submit", and we failed to find one, 
+      // we can optionally record a generic "press Enter" or just ignore if strict.
+      // Let's record a "press_key" action for completeness if user validates it later.
+      const selector = generateSelector(target);
+      chrome.runtime.sendMessage({
+            type: 'RECORD_ACTION',
+            command: {
+              action: 'press_key',
+              selectorType: selector.startsWith('//') ? 'xpath' : 'css',
+              selector: selector,
+              params: { key: 'Enter' },
+              description: 'Press Enter'
+            }
+      });
+  }
+}
+
 // Start/Stop Logic
 function enableRecording() {
   if (isRecording) return;
   isRecording = true;
   document.addEventListener('click', handleRecordClick, true); // Capture phase
   document.addEventListener('change', handleRecordInput, true);
+  document.addEventListener('keydown', handleRecordKeydown, true);
   document.addEventListener('scroll', handleRecordScroll, true);
   console.log('[TubeCreate] Recording started');
 }
@@ -495,6 +653,7 @@ function disableRecording() {
   
   document.removeEventListener('click', handleRecordClick, true);
   document.removeEventListener('change', handleRecordInput, true);
+  document.removeEventListener('keydown', handleRecordKeydown, true);
   document.removeEventListener('scroll', handleRecordScroll, true);
   console.log('[TubeCreate] Recording stopped');
 }

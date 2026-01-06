@@ -7,9 +7,9 @@
   </head>
   <body>
     <div class="container">
-      <div class="header">
-        <h1>🎬 TubeCreate</h1>
-        <p class="subtitle">Browser Controller</p>
+      <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px 0;">
+        <img src="icons/logo.png" alt="Logo" style="height: 32px; width: auto; object-fit: contain;">
+        <h1 style="margin: 0; font-size: 20px; color: #f8fafc;">TubeCreate</h1>
       </div>
 
       <div class="token-section">
@@ -37,20 +37,62 @@
         />
       </div>
 
-      <div class="actions">
+      <div class="actions" style="margin-bottom: 15px;">
         <button id="connectBtn" class="btn primary">Connect</button>
         <button id="disconnectBtn" class="btn secondary" style="display: none">
           Disconnect
         </button>
       </div>
 
-      <div class="recorder-section" style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
-        <label>Macro Recorder</label>
-        <div class="recorder-controls" style="display: flex; gap: 10px; margin-bottom: 10px;">
-          <button id="recordBtn" class="btn danger" style="flex: 1;">🔴 Record</button>
-          <button id="stopBtn" class="btn secondary" style="flex: 1; display: none;">⏹ Stop</button>
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="automation">Automation</button>
+        <button class="tab-btn" data-tab="recorder">Recorder</button>
+      </div>
+
+      <!-- Automation Tab -->
+      <div id="automationTab" class="tab-content active">
+        <div id="automationControl" style="display: none; background: #1E293B; padding: 10px; border-radius: 6px; border: 1px solid #334155;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <span style="color: #94A3B8; font-size: 11px;">Current Mode</span>
+                <span id="modeBadge" style="background: #22C55E; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;">RUNNING</span>
+            </div>
+            
+            <!-- Execution Progress -->
+            <div style="margin-bottom: 10px;">
+                <div id="queueHeader" style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #0F172A; border-radius: 4px; cursor: pointer;">
+                    <span style="color: #94A3B8; font-size: 11px;">Execution Progress</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span id="queueInfo" style="font-size: 11px; font-weight: bold;">-</span>
+                        <span id="queueToggle" style="color: #64748B; font-size: 10px;">▼</span>
+                    </div>
+                </div>
+                <div id="queueList" style="display: none; max-height: 200px; overflow-y: auto; background: #0F172A; border-radius: 4px; margin-top: 4px; padding: 8px;">
+                    <!-- Execution timeline will be populated here -->
+                </div>
+            </div>
+            
+            <!-- Control Buttons -->
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <button id="pauseBtn" class="btn" style="flex: 1; background: #F59E0B; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">⏸ Pause</button>
+                <button id="resumeBtn" class="btn" style="flex: 1; background: #22C55E; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; display: none;">▶ Resume</button>
+                <button id="stopBtn" class="btn" style="flex: 1; background: #EF4444; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">⏹ Stop & Clear</button>
+            </div>
         </div>
-        <textarea id="jsonOutput" rows="5" readonly placeholder="Recorded JSON will appear here..." style="width: 100%; background: #1a1a1a; color: #0f0; border: 1px solid #333; border-radius: 4px; font-family: monospace; font-size: 11px; resize: vertical;"></textarea>
+        <div id="connectWarning" style="display: block; text-align: center; color: #888; padding: 20px; border: 1px dashed #444; border-radius: 6px;">
+            Please connect to server to use automation.
+        </div>
+      </div>
+
+      <!-- Recorder Tab -->
+      <div id="recorderTab" class="tab-content">
+        <div class="recorder-section" style="padding-top: 5px;">
+            <div class="recorder-controls" style="display: flex; gap: 10px; margin-bottom: 10px;">
+            <button id="recordBtn" class="btn danger" style="flex: 1;">🔴 Record</button>
+            <button id="stopRecordBtn" class="btn secondary" style="flex: 1; display: none;">⏹ Stop</button>
+            </div>
+            <textarea id="jsonOutput" rows="8" readonly placeholder="Recorded JSON will appear here..." style="width: 100%; background: #1a1a1a; color: #0f0; border: 1px solid #333; border-radius: 4px; font-family: monospace; font-size: 11px; resize: vertical;"></textarea>
+        </div>
       </div>
 
       <div class="footer">

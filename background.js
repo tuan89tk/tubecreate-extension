@@ -12,6 +12,59 @@ let token = null;
 let apiUrl = DEFAULT_API_URL;
 let isConnected = false;
 let pollTimer = null;
+let isPaused = false; // New: pause execution
+
+// Execution tracking
+let executionHistory = []; // {id, action, description, status: 'success'|'error', time, error?}
+let currentExecuting = null; // {id, action, description, startTime}
+const MAX_HISTORY = 20; // Keep last 20 commands
+let shouldAbort = false; // Flag to abort current execution
+
+// Keep-alive using Chrome alarms
+
+// Start polling for commands
+function startPolling() {
+  if (pollTimer) return;
+  
+  pollTimer = setInterval(async () => {
+    if (!isConnected) return;
+    
+    // Don't fetch new commands when paused
+    if (isPaused) return;
+    
+    try {
+      // Keep fetching commands until queue is empty OR paused
+      let hasMoreCommands = true;
+      
+      while (hasMoreCommands && !isPaused && !shouldAbort) {
+        const response = await fetch(`${apiUrl}/commands/${token}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.command) {
+            console.log('[BrowserController] Received command:', data.command);
+            
+            // Check pause and abort before executing
+            if (!isPaused && !shouldAbort) {
+              await executeCommand(data.command);
+            } else {
+              console.log('[BrowserController] Paused or aborted, skipping execution');
+              break;
+            }
+          } else {
+            // No more commands in queue
+            hasMoreCommands = false;
+          }
+        } else {
+          hasMoreCommands = false;
+        }
+      }
+    } catch (error) {
+      console.error('[BrowserController] Poll error:', error);
+    }
+  }, POLL_INTERVAL);
+}
 
 // Keep-alive using Chrome alarms (prevents service worker from stopping)
 chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
@@ -241,30 +294,6 @@ async function disconnect() {
   return { success: true };
 }
 
-// Start polling for commands
-function startPolling() {
-  if (pollTimer) return;
-  
-  pollTimer = setInterval(async () => {
-    if (!isConnected) return;
-    
-    try {
-      const response = await fetch(`${apiUrl}/commands/${token}`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        if (data.command) {
-          console.log('[BrowserController] Received command:', data.command);
-          await executeCommand(data.command);
-        }
-      }
-    } catch (error) {
-      console.error('[BrowserController] Poll error:', error);
-    }
-  }, POLL_INTERVAL);
-}
-
 // Stop polling
 function stopPolling() {
   if (pollTimer) {
@@ -275,15 +304,71 @@ function stopPolling() {
 
 // Execute command on active tab
 async function executeCommand(command) {
+  // Track execution start
+  currentExecuting = {
+    id: command.id,
+    action: command.action,
+    description: command.description || command.action,
+    startTime: Date.now()
+  };
+  
   try {
+    // Check abort flag immediately
+    if (shouldAbort) {
+      console.log('[BrowserController] Execution aborted by user');
+      await sendResult(command.id, { success: false, error: 'Aborted by user' });
+      
+      // Track abort
+      executionHistory.push({
+        id: command.id,
+        action: command.action,
+        description: command.description || command.action,
+        status: 'error',
+        error: 'Aborted by user',
+        time: 0
+      });
+      if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+      currentExecuting = null;
+      return;
+    }
+
+    // Check mutual exclusion: Block execution if recording
+    const recState = await chrome.storage.local.get(['isRecording']);
+    if (recState.isRecording) {
+         console.log('[BrowserController] Execution blocked: Recording in progress');
+         await sendResult(command.id, { success: false, error: 'Blocked: Recording in progress' });
+         // Log error
+         executionHistory.push({
+            id: command.id,
+            action: command.action,
+            description: command.description || command.action,
+            status: 'error',
+            error: 'Blocked: Recording in progress',
+            time: 0
+         });
+         currentExecuting = null;
+         return;
+    }
+    
+    
     // Get active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
     if (!tab) {
       await sendResult(command.id, { success: false, error: 'No active tab' });
+      // Track error
+      executionHistory.push({
+        id: command.id,
+        action: command.action,
+        description: command.description || command.action,
+        status: 'error',
+        error: 'No active tab',
+        time: Date.now() - currentExecuting.startTime
+      });
+      if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+      currentExecuting = null;
       return;
     }
-    
     // Handle navigation separately (doesn't need content script)
     if (command.action === 'navigate') {
       const targetUrl = command.params?.url || command.selector;
@@ -355,8 +440,40 @@ async function executeCommand(command) {
     // Handle wait action (doesn't need DOM access)
     if (command.action === 'wait') {
       const duration = command.params?.duration || 1000;
-      await new Promise(r => setTimeout(r, duration));
+      const startTime = Date.now();
+      
+      // Poll every 100ms to check abort flag
+      while (Date.now() - startTime < duration) {
+        if (shouldAbort) {
+          console.log('[BrowserController] Wait aborted by user');
+          await sendResult(command.id, { success: false, error: 'Aborted' });
+          executionHistory.push({
+            id: command.id,
+            action: command.action,
+            description: command.description || command.action,
+            status: 'error',
+            error: 'Aborted',
+            time: Date.now() - currentExecuting.startTime
+          });
+          if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+          currentExecuting = null;
+          return;
+        }
+        await new Promise(r => setTimeout(r, Math.min(100, duration - (Date.now() - startTime))));
+      }
+      
       await sendResult(command.id, { success: true, result: `Waited ${duration}ms` });
+      
+      // Track success
+      executionHistory.push({
+        id: command.id,
+        action: command.action,
+        description: command.description || command.action,
+        status: 'success',
+        time: Date.now() - currentExecuting.startTime
+      });
+      if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+      currentExecuting = null;
       return;
     }
     
@@ -427,9 +544,33 @@ async function executeCommand(command) {
     const result = await chrome.tabs.sendMessage(tab.id, { type: 'EXECUTE', command });
     await sendResult(command.id, result);
     
+    // Track success/error
+    executionHistory.push({
+      id: command.id,
+      action: command.action,
+      description: command.description || command.action,
+      status: result.success ? 'success' : 'error',
+      error: result.error,
+      time: Date.now() - currentExecuting.startTime
+    });
+    if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+    currentExecuting = null;
+    
   } catch (error) {
     console.error('[BrowserController] Execute error:', error);
     await sendResult(command.id, { success: false, error: error.message });
+    
+    // Track error
+    executionHistory.push({
+      id: command.id,
+      action: command.action,
+      description: currentExecuting?.description || command.action,
+      status: 'error',
+      error: error.message,
+      time: currentExecuting ? Date.now() - currentExecuting.startTime : 0
+    });
+    if (executionHistory.length > MAX_HISTORY) executionHistory.shift();
+    currentExecuting = null;
   }
 }
 
@@ -465,7 +606,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await chrome.storage.local.set({ token });
           }
         }
-        sendResponse({ token, apiUrl, isConnected });
+        sendResponse({ token, apiUrl, isConnected, isAutomationPaused: isPaused });
         break;
         
       case 'CONNECT':
@@ -494,6 +635,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // --- Macro Recorder Messages ---
       case 'START_RECORDING':
+        // Check mutual exclusion: Block recording if executing (or not paused?)
+        // User said "action đang thực hiện" -> currently executing
+        if (currentExecuting) {
+             sendResponse({ success: false, error: 'Cannot record while automation is running an action' });
+             break;
+        }
+
         await chrome.storage.local.set({ 
             isRecording: true, 
             recordedCommands: [],
@@ -550,6 +698,117 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               recordedCommands: cmds,
               lastActionTime: now
           });
+        }
+        break;
+        
+      case 'GET_EXECUTION_STATUS':
+        sendResponse({
+          success: true,
+          history: executionHistory.slice(-10), // Last 10 completed
+          current: currentExecuting,
+          isPaused
+        });
+        break;
+        
+      case 'PAUSE_AUTOMATION':
+        isPaused = true;
+        sendResponse({ success: true, isPaused: true });
+        break;
+        
+      case 'RESUME_AUTOMATION':
+        isPaused = false;
+        shouldAbort = false; // Clear abort flag when resuming
+        sendResponse({ success: true, isPaused: false });
+        break;
+        
+      case 'GET_QUEUE':
+        try {
+          const response = await fetch(`${apiUrl}/extensions`);
+          if (response.ok) {
+            const data = await response.json();
+            const ext = data.extensions?.find(e => e.token === token);
+            sendResponse({ 
+              success: true, 
+              isPaused,
+              queueSize: ext?.queueSize || 0,
+              queuePreview: ext?.queuePreview || []
+            });
+          } else {
+            sendResponse({ success: false, error: 'Failed to fetch queue' });
+          }
+        } catch (error) {
+          sendResponse({ success: false, error: error.message });
+        }
+        break;
+        
+      case 'CLEAR_QUEUE':
+        try {
+          console.log('[BrowserController] Stopping all execution...');
+          
+          // 1. Set abort flag to stop current executing command
+          shouldAbort = true;
+          
+          // 2. Pause to stop fetching new commands
+          isPaused = true;
+          
+          // 3. Wait for current command to finish aborting and send result
+          await new Promise(r => setTimeout(r, 500));
+          
+          // 4. Clear queue on server and re-register
+          if (token && isConnected) {
+            try {
+              // Delete old registration
+              await fetch(`${apiUrl}/extensions/${token}`, { method: 'DELETE' });
+              
+              // Small delay before re-registering
+              await new Promise(r => setTimeout(r, 200));
+              
+              // Re-register to create fresh queue
+              const registerResponse = await fetch(`${apiUrl}/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  token: token,
+                  userAgent: navigator.userAgent,
+                  timestamp: Date.now()
+                })
+              });
+              
+              if (!registerResponse.ok) {
+                console.error('[BrowserController] Re-registration failed');
+                // If re-register fails, disconnect and prepare for manual reconnect
+                isConnected = false;
+                await chrome.storage.local.set({ isConnected: false });
+                stopPolling();
+              }
+            } catch (error) {
+              console.error('[BrowserController] Clear queue server error:', error);
+            }
+          }
+          
+          console.log('[BrowserController] Executing soft reset...');
+          
+          // 5. Reset all state flags
+          shouldAbort = false;
+          isPaused = false;  // Ready for new commands
+          currentExecuting = null;
+          executionHistory = [];
+          
+          // 6. Ensure polling is active if still connected
+          if (isConnected && !pollTimer) {
+            startPolling();
+          }
+          
+          console.log('[BrowserController] Stopped and cleared. Ready for new commands.');
+          sendResponse({ success: true, message: 'Stopped and cleared. Ready for new batch.' });
+          
+        } catch (error) {
+          console.error('[BrowserController] Clear error:', error);
+          // Reset flags even on error
+          shouldAbort = false;
+          isPaused = false;
+          currentExecuting = null;
+          sendResponse({ success: false, error: error.message });
         }
         break;
         
