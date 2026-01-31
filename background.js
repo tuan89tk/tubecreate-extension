@@ -100,7 +100,9 @@ async function init() {
   
   
   if (stored.isConnected) {
-    await connect();
+    console.log('[BrowserController] Found saved connection state, connecting...');
+    // We delay connection slightly to allow user to intervene if there's a loop
+    setTimeout(() => connect(), 1000);
   }
 
   // Create context menus
@@ -186,6 +188,14 @@ async function init() {
   // Download history is available via api.storage or message handler
   // Service workers don't have window object
 }
+
+// Auto-connect on startup
+api.runtime.onStartup.addListener(() => {
+  console.log('[BrowserController] Browser started, auto-connecting...');
+  connect();
+});
+
+// (Removed duplicate init)
 
 // Handle Context Menu Click
 api.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -442,10 +452,18 @@ async function executeCommand(command) {
     if (command.action === 'close') {
       console.log('[BrowserController] Closing browser...');
       try {
+        // 1. Mark as disconnected in state and storage FIRST to prevent auto-reconnect loop
+        isConnected = false;
+        await api.storage.local.set({ isConnected: false });
+        stopPolling();
+
         const windows = await api.windows.getAll();
         // Send success result BEFORE closing, otherwise it might fail
         await sendResult(command.id, { success: true, result: 'Closing all windows' });
         
+        // Small delay to ensure result is sent
+        await new Promise(r => setTimeout(r, 500));
+
         for (const win of windows) {
           try {
             await api.windows.remove(win.id);

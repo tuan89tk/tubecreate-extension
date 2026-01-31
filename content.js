@@ -52,6 +52,9 @@ async function executeCommand(command) {
       case 'getElements':
         return await doGetElements(selectorType, selector, params?.attributes);
         
+      case 'getSimplifiedContent':
+        return await doGetSimplifiedContent();
+        
       case 'loop':
         return await doLoop(selectorType, selector, params?.commands || []);
         
@@ -773,3 +776,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 });
+
+async function doGetSimplifiedContent() {
+  const clone = document.documentElement.cloneNode(true);
+  
+  // Remove scripts, styles, etc.
+  const toRemove = [
+    'script', 'style', 'noscript', 'iframe', 'svg', 
+    'link[rel="stylesheet"]', 'meta', 
+    '[hidden]', '[aria-hidden="true"]',
+    'nav', 'footer', 'header', 'aside'
+  ];
+  
+  toRemove.forEach(sel => {
+    const els = clone.querySelectorAll(sel);
+    els.forEach(el => el.remove());
+  });
+  
+  // Remove comments
+  const iterator = document.createNodeIterator(clone, NodeFilter.SHOW_COMMENT);
+  let currentNode;
+  while (currentNode = iterator.nextNode()) {
+    currentNode.parentNode.removeChild(currentNode);
+  }
+  
+  // Get HTML
+  const html = clone.innerHTML;
+  
+  return {
+    success: true,
+    result: {
+      url: window.location.href,
+      title: document.title,
+      content: html,
+      source: html // alias
+    }
+  };
+}
