@@ -2,6 +2,21 @@
  * TubeCreate Browser Controller - Popup Script
  */
 
+// API Wrapper for Firefox (Promise) vs Chrome (Callback) compatibility
+const api = {
+    runtime: {
+        sendMessage: (message) => {
+            if (typeof browser !== 'undefined') {
+                return browser.runtime.sendMessage(message);
+            } else {
+                return new Promise((resolve) => {
+                    chrome.runtime.sendMessage(message, resolve);
+                });
+            }
+        }
+    }
+};
+
 const tokenInput = document.getElementById('token');
 const copyBtn = document.getElementById('copyToken');
 const refreshTokenBtn = document.getElementById('refreshToken');
@@ -52,7 +67,7 @@ queueHeader.addEventListener('click', () => {
 
 // Load current status
 async function loadStatus() {
-  const response = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+  const response = await api.runtime.sendMessage({ type: 'GET_STATUS' });
   
   tokenInput.value = response.token || '';
   apiUrlInput.value = response.apiUrl || 'http://localhost:5295/api/v1/browser';
@@ -60,7 +75,7 @@ async function loadStatus() {
   // Force token generation if missing
   if (!response.token) {
     console.log('Token missing, refreshing...');
-    const result = await chrome.runtime.sendMessage({ type: 'REFRESH_TOKEN' });
+    const result = await api.runtime.sendMessage({ type: 'REFRESH_TOKEN' });
     if (result.token) {
         tokenInput.value = result.token;
     }
@@ -79,9 +94,9 @@ async function loadStatus() {
 async function updateExecutionStatus() {
   try {
     // Get queue info
-    const queueResponse = await chrome.runtime.sendMessage({ type: 'GET_QUEUE' });
+    const queueResponse = await api.runtime.sendMessage({ type: 'GET_QUEUE' });
     // Get execution status  
-    const execResponse = await chrome.runtime.sendMessage({ type: 'GET_EXECUTION_STATUS' });
+    const execResponse = await api.runtime.sendMessage({ type: 'GET_EXECUTION_STATUS' });
     
     if (queueResponse.success && execResponse.success) {
       const pending = queueResponse.queueSize || 0;
@@ -212,20 +227,20 @@ function updateAutomationUI(isPaused) {
 
 // Pause Automation
 pauseBtn.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: 'PAUSE_AUTOMATION' });
+    await api.runtime.sendMessage({ type: 'PAUSE_AUTOMATION' });
     updateAutomationUI(true);
 });
 
 // Resume Automation
 resumeBtn.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: 'RESUME_AUTOMATION' });
+    await api.runtime.sendMessage({ type: 'RESUME_AUTOMATION' });
     updateAutomationUI(false);
 });
 
 // Stop & Clear Queue
 stopBtn.addEventListener('click', async () => {
     if (confirm('Stop and clear all commands?')) {
-        await chrome.runtime.sendMessage({ type: 'CLEAR_QUEUE' });
+        await api.runtime.sendMessage({ type: 'CLEAR_QUEUE' });
         // Set to running state - ready for new batch
         updateAutomationUI(false);
         updateExecutionStatus();
@@ -242,7 +257,7 @@ copyBtn.addEventListener('click', async () => {
 // Refresh token - generate new one
 refreshTokenBtn.addEventListener('click', async () => {
   refreshTokenBtn.textContent = '⏳';
-  const result = await chrome.runtime.sendMessage({ type: 'REFRESH_TOKEN' });
+  const result = await api.runtime.sendMessage({ type: 'REFRESH_TOKEN' });
   if (result.token) {
     tokenInput.value = result.token;
     refreshTokenBtn.textContent = '✓';
@@ -254,7 +269,7 @@ refreshTokenBtn.addEventListener('click', async () => {
 
 // Update API URL
 apiUrlInput.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({ 
+  await api.runtime.sendMessage({ 
     type: 'SET_API_URL', 
     url: apiUrlInput.value 
   });
@@ -265,7 +280,7 @@ connectBtn.addEventListener('click', async () => {
   connectBtn.disabled = true;
   connectBtn.textContent = 'Connecting...';
   
-  const result = await chrome.runtime.sendMessage({ type: 'CONNECT' });
+  const result = await api.runtime.sendMessage({ type: 'CONNECT' });
   
   if (result.success) {
     updateConnectionUI(true);
@@ -281,7 +296,7 @@ connectBtn.addEventListener('click', async () => {
 
 // Disconnect
 disconnectBtn.addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ type: 'DISCONNECT' });
+  await api.runtime.sendMessage({ type: 'DISCONNECT' });
   updateConnectionUI(false);
 });
 
@@ -303,14 +318,14 @@ async function updateRecorderUI(isRecording) {
 
 // Start Recording
 recordBtn.addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ type: 'START_RECORDING' });
+  await api.runtime.sendMessage({ type: 'START_RECORDING' });
   updateRecorderUI(true);
   window.close(); // Close popup to let user interact
 });
 
 // Stop Recording
 stopRecordBtn.addEventListener('click', async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
+  const result = await api.runtime.sendMessage({ type: 'STOP_RECORDING' });
   updateRecorderUI(false);
   
   if (result.commands && result.commands.length > 0) {
@@ -322,7 +337,7 @@ stopRecordBtn.addEventListener('click', async () => {
 
 // Check recording status on load
 // Check recording status on load
-chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' }, (response) => {
+api.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' }).then((response) => {
   updateRecorderUI(response.isRecording);
   if (!response.isRecording && response.commands && response.commands.length > 0) {
     jsonOutput.value = JSON.stringify(response.commands, null, 2);

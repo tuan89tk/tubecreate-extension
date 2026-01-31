@@ -28,6 +28,9 @@ async function executeCommand(command) {
       case 'getText':
         return await doGetText(selectorType, selector);
         
+      case 'getPageText':
+        return await doGetPageText();
+        
       case 'getAttribute':
         return await doGetAttribute(selectorType, selector, params?.attribute);
         
@@ -146,6 +149,18 @@ async function doGetText(selectorType, selector) {
   if (!el) return { success: false, error: 'Element not found' };
   
   return { success: true, result: el.textContent || el.innerText };
+}
+
+async function doGetPageText() {
+  const body = document.body;
+  if (!body) return { success: false, error: 'No body element' };
+  
+  // Get all text content, cleaning up whitespace
+  const text = (body.innerText || body.textContent || "")
+    .replace(/\s+/g, ' ')
+    .trim();
+    
+  return { success: true, result: text };
 }
 
 async function doGetAttribute(selectorType, selector, attribute) {

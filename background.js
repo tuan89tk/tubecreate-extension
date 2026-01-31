@@ -21,6 +21,7 @@ const MAX_HISTORY = 20; // Keep last 20 commands
 let shouldAbort = false; // Flag to abort current execution
 
 // Keep-alive using Chrome alarms
+const api = typeof browser !== 'undefined' ? browser : chrome;
 
 // Start polling for commands
 function startPolling() {
@@ -67,8 +68,8 @@ function startPolling() {
 }
 
 // Keep-alive using Chrome alarms (prevents service worker from stopping)
-chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((alarm) => {
+api.alarms.create('keepAlive', { periodInMinutes: 0.5 });
+api.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepAlive' && isConnected) {
     console.log('[BrowserController] Keep-alive ping');
   }
@@ -82,13 +83,13 @@ function generateToken() {
 // Initialize extension
 async function init() {
   // Load saved settings
-  const stored = await chrome.storage.local.get(['token', 'apiUrl', 'isConnected']);
+  const stored = await api.storage.local.get(['token', 'apiUrl', 'isConnected']);
   
   if (stored.token) {
     token = stored.token;
   } else {
     token = generateToken();
-    await chrome.storage.local.set({ token });
+    await api.storage.local.set({ token });
   }
   
   if (stored.apiUrl) {
@@ -103,34 +104,34 @@ async function init() {
   }
 
   // Create context menus
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "pick-parent",
     title: "TubeCreate: Pick Selector",
     contexts: ["all", "selection"]
   });
 
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "pick-css",
     parentId: "pick-parent",
     title: "Copy CSS",
     contexts: ["all", "selection"]
   });
 
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "pick-xpath",
     parentId: "pick-parent",
     title: "Copy XPath",
     contexts: ["all", "selection"]
   });
 
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "pick-match",
     parentId: "pick-parent",
     title: "Copy Match (HTML)",
     contexts: ["all", "selection"]
   });
 
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "pick-parent-selector",
     parentId: "pick-parent",
     title: "Copy Parent CSS",
@@ -141,15 +142,15 @@ async function init() {
   let downloadHistory = [];
   
   // Load existing download history
-  const storedDownloads = await chrome.storage.local.get(['downloadHistory']);
+  const storedDownloads = await api.storage.local.get(['downloadHistory']);
   if (storedDownloads.downloadHistory) {
     downloadHistory = storedDownloads.downloadHistory;
   }
   
   // Listen for download completion
-  chrome.downloads.onChanged.addListener((downloadDelta) => {
+  api.downloads.onChanged.addListener((downloadDelta) => {
     if (downloadDelta.state && downloadDelta.state.current === 'complete') {
-      chrome.downloads.search({ id: downloadDelta.id }, (results) => {
+      api.downloads.search({ id: downloadDelta.id }, (results) => {
         if (results.length > 0) {
           const download = results[0];
           const downloadInfo = {
@@ -172,35 +173,35 @@ async function init() {
             downloadHistory.shift();
           }
           
-          chrome.storage.local.set({ downloadHistory });
+          api.storage.local.set({ downloadHistory });
         }
       });
     }
   });
   
-  chrome.downloads.onCreated.addListener((item) => {
+  api.downloads.onCreated.addListener((item) => {
     console.log('[Downloads] Started:', item.filename);
   });
 
-  // Download history is available via chrome.storage or message handler
+  // Download history is available via api.storage or message handler
   // Service workers don't have window object
 }
 
 // Handle Context Menu Click
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+api.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId.startsWith("pick-")) {
     const mode = info.menuItemId.replace("pick-", ""); // css, xpath, match
     
     // Send message to content script to get element info
     try {
-      const result = await chrome.tabs.sendMessage(tab.id, { 
+      const result = await api.tabs.sendMessage(tab.id, { 
         type: 'GET_CTX_ELEMENT',
         mode: mode
       });
       
       if (result && result.selector) {
         // Find recording state
-        const stored = await chrome.storage.local.get(['isRecording', 'recordedCommands']);
+        const stored = await api.storage.local.get(['isRecording', 'recordedCommands']);
         if (stored.isRecording) {
           const commands = stored.recordedCommands || [];
           
@@ -222,12 +223,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             selectorType: selectorType,
             description: `Picked ${mode.toUpperCase()}: ${result.tagName}`
           });
-          await chrome.storage.local.set({ recordedCommands: commands });
+          await api.storage.local.set({ recordedCommands: commands });
         }
         
         // Flash badge to indicate success
-        chrome.action.setBadgeText({ text: 'COPIED', tabId: tab.id });
-        setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab.id }), 1500);
+        api.action.setBadgeText({ text: 'COPIED', tabId: tab.id });
+        setTimeout(() => api.action.setBadgeText({ text: '', tabId: tab.id }), 1500);
       }
     } catch (e) {
       console.error('Pick selector error:', e);
@@ -240,12 +241,12 @@ async function connect() {
   try {
     // Ensure token is initialized
     if (!token) {
-      const stored = await chrome.storage.local.get(['token']);
+      const stored = await api.storage.local.get(['token']);
       if (stored.token) {
         token = stored.token;
       } else {
         token = generateToken();
-        await chrome.storage.local.set({ token });
+        await api.storage.local.set({ token });
       }
     }
     
@@ -263,7 +264,7 @@ async function connect() {
     
     if (response.ok) {
       isConnected = true;
-      await chrome.storage.local.set({ isConnected: true });
+      await api.storage.local.set({ isConnected: true });
       startPolling();
       console.log('[BrowserController] Connected to API server');
       return { success: true };
@@ -282,7 +283,7 @@ async function connect() {
 async function disconnect() {
   stopPolling();
   isConnected = false;
-  await chrome.storage.local.set({ isConnected: false });
+  await api.storage.local.set({ isConnected: false });
   
   try {
     await fetch(`${apiUrl}/extensions/${token}`, { method: 'DELETE' });
@@ -333,7 +334,7 @@ async function executeCommand(command) {
     }
 
     // Check mutual exclusion: Block execution if recording
-    const recState = await chrome.storage.local.get(['isRecording']);
+    const recState = await api.storage.local.get(['isRecording']);
     if (recState.isRecording) {
          console.log('[BrowserController] Execution blocked: Recording in progress');
          await sendResult(command.id, { success: false, error: 'Blocked: Recording in progress' });
@@ -352,7 +353,7 @@ async function executeCommand(command) {
     
     
     // Get active tab
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
     
     if (!tab) {
       await sendResult(command.id, { success: false, error: 'No active tab' });
@@ -375,21 +376,21 @@ async function executeCommand(command) {
       console.log('[BrowserController] Navigating to:', targetUrl);
       
       // Update tab and wait for loading to complete
-      await chrome.tabs.update(tab.id, { url: targetUrl });
+      await api.tabs.update(tab.id, { url: targetUrl });
       
       // Wait for navigation to complete
       await new Promise((resolve) => {
         const listener = (tabId, changeInfo) => {
           if (tabId === tab.id && changeInfo.status === 'complete') {
-            chrome.tabs.onUpdated.removeListener(listener);
+            api.tabs.onUpdated.removeListener(listener);
             resolve();
           }
         };
-        chrome.tabs.onUpdated.addListener(listener);
+        api.tabs.onUpdated.addListener(listener);
         
         // Timeout after 30 seconds
         setTimeout(() => {
-          chrome.tabs.onUpdated.removeListener(listener);
+          api.tabs.onUpdated.removeListener(listener);
           resolve();
         }, 30000);
       });
@@ -402,13 +403,13 @@ async function executeCommand(command) {
     if (command.action === 'screenshot') {
       try {
         // Check if tab URL is restricted for screenshots
-        const currentTab = await chrome.tabs.get(tab.id);
+        const currentTab = await api.tabs.get(tab.id);
         if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
           await sendResult(command.id, { success: false, error: 'Cannot capture chrome:// pages' });
           return;
         }
         
-        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+        const dataUrl = await api.tabs.captureVisibleTab(null, { format: 'png' });
         
         // Save screenshot if save_path is provided
         if (command.params?.save_path) {
@@ -437,6 +438,28 @@ async function executeCommand(command) {
       }
     }
     
+    // Handle close action (doesn't need DOM access)
+    if (command.action === 'close') {
+      console.log('[BrowserController] Closing browser...');
+      try {
+        const windows = await api.windows.getAll();
+        // Send success result BEFORE closing, otherwise it might fail
+        await sendResult(command.id, { success: true, result: 'Closing all windows' });
+        
+        for (const win of windows) {
+          try {
+            await api.windows.remove(win.id);
+          } catch (e) {
+            console.error('[BrowserController] Error removing window:', e);
+          }
+        }
+        return;
+      } catch (error) {
+        await sendResult(command.id, { success: false, error: error.message });
+        return;
+      }
+    }
+
     // Handle wait action (doesn't need DOM access)
     if (command.action === 'wait') {
       const duration = command.params?.duration || 1000;
@@ -492,7 +515,7 @@ async function executeCommand(command) {
           // Random scroll amount between 200-800px
           const scrollAmount = Math.floor(Math.random() * 600) + 200;
           
-          await chrome.scripting.executeScript({
+          await api.scripting.executeScript({
             target: { tabId: tab.id },
             func: (amount) => {
               window.scrollBy({
@@ -528,7 +551,7 @@ async function executeCommand(command) {
     
     // Try to inject content script first (in case it wasn't loaded)
     try {
-      await chrome.scripting.executeScript({
+      await api.scripting.executeScript({
         target: { tabId: tab.id },
         files: ['content.js']
       });
@@ -538,10 +561,33 @@ async function executeCommand(command) {
     }
     
     // Small delay to ensure script is ready
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 200));
     
+    // Robust messaging with retries for "Receiving end does not exist"
+    const sendMessageWithRetry = async (tabId, msg, retries = 5) => {
+        for (let i = 0; i < retries; i++) {
+            try {
+                return await api.tabs.sendMessage(tabId, msg);
+            } catch (err) {
+                if (err.message.includes("Receiving end does not exist") && i < retries - 1) {
+                    console.log(`[BrowserController] Retrying message send (${i+1}/${retries})...`);
+                    await new Promise(r => setTimeout(r, 1000));
+                    // Re-inject if it might have been a navigation
+                    try {
+                        await api.scripting.executeScript({
+                            target: { tabId: tabId },
+                            files: ['content.js']
+                        });
+                    } catch(e) {}
+                    continue;
+                }
+                throw err;
+            }
+        }
+    };
+
     // Send to content script for DOM operations
-    const result = await chrome.tabs.sendMessage(tab.id, { type: 'EXECUTE', command });
+    const result = await sendMessageWithRetry(tab.id, { type: 'EXECUTE', command });
     await sendResult(command.id, result);
     
     // Track success/error
@@ -592,18 +638,18 @@ async function sendResult(commandId, result) {
 }
 
 // Handle messages from popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message.type) {
       case 'GET_STATUS':
         // Ensure token exists
         if (!token) {
-          const stored = await chrome.storage.local.get(['token']);
+          const stored = await api.storage.local.get(['token']);
           if (stored.token) {
             token = stored.token;
           } else {
             token = generateToken();
-            await chrome.storage.local.set({ token });
+            await api.storage.local.set({ token });
           }
         }
         sendResponse({ token, apiUrl, isConnected, isAutomationPaused: isPaused });
@@ -621,14 +667,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         
       case 'SET_API_URL':
         apiUrl = message.url;
-        await chrome.storage.local.set({ apiUrl });
+        await api.storage.local.set({ apiUrl });
         sendResponse({ success: true });
         break;
         
       case 'REFRESH_TOKEN':
         // Generate new token
         token = generateToken();
-        await chrome.storage.local.set({ token });
+        await api.storage.local.set({ token });
         console.log('[BrowserController] Token refreshed:', token);
         sendResponse({ success: true, token });
         break;
@@ -642,33 +688,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
              break;
         }
 
-        await chrome.storage.local.set({ 
+        await api.storage.local.set({ 
             isRecording: true, 
             recordedCommands: [],
             lastActionTime: Date.now() // Initialize timer
         });
         // Broadcast to all tabs to enable listeners
-        const tabsStart = await chrome.tabs.query({});
+        const tabsStart = await api.tabs.query({});
         for (const t of tabsStart) {
-          try { await chrome.tabs.sendMessage(t.id, { type: 'START_RECORDING' }); } catch(e){}
+          try { await api.tabs.sendMessage(t.id, { type: 'START_RECORDING' }); } catch(e){}
         }
         sendResponse({ success: true });
         break;
 
       case 'STOP_RECORDING':
-        await chrome.storage.local.set({ isRecording: false });
+        await api.storage.local.set({ isRecording: false });
         // Broadcast to all tabs to disable listeners
-        const tabsStop = await chrome.tabs.query({});
+        const tabsStop = await api.tabs.query({});
         for (const t of tabsStop) {
-          try { await chrome.tabs.sendMessage(t.id, { type: 'STOP_RECORDING' }); } catch(e){}
+          try { await api.tabs.sendMessage(t.id, { type: 'STOP_RECORDING' }); } catch(e){}
         }
         // Return recorded commands
-        const recordResult = await chrome.storage.local.get(['recordedCommands']);
+        const recordResult = await api.storage.local.get(['recordedCommands']);
         sendResponse({ success: true, commands: recordResult.recordedCommands || [] });
         break;
 
       case 'GET_RECORDING_STATUS':
-        const status = await chrome.storage.local.get(['isRecording', 'recordedCommands']);
+        const status = await api.storage.local.get(['isRecording', 'recordedCommands']);
         sendResponse({ 
           isRecording: status.isRecording || false, 
           commands: status.recordedCommands || [] 
@@ -676,7 +722,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
         
       case 'RECORD_ACTION':
-        const current = await chrome.storage.local.get(['recordedCommands', 'isRecording', 'lastActionTime']);
+        const current = await api.storage.local.get(['recordedCommands', 'isRecording', 'lastActionTime']);
         if (current.isRecording) {
           const cmds = current.recordedCommands || [];
           const now = Date.now();
@@ -694,7 +740,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           
           cmds.push(message.command);
-          await chrome.storage.local.set({ 
+          await api.storage.local.set({ 
               recordedCommands: cmds,
               lastActionTime: now
           });
@@ -778,7 +824,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 console.error('[BrowserController] Re-registration failed');
                 // If re-register fails, disconnect and prepare for manual reconnect
                 isConnected = false;
-                await chrome.storage.local.set({ isConnected: false });
+                await api.storage.local.set({ isConnected: false });
                 stopPolling();
               }
             } catch (error) {
@@ -813,7 +859,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
         
       case 'GET_DOWNLOADS':
-        const downloads = await chrome.storage.local.get(['downloadHistory']);
+        const downloads = await api.storage.local.get(['downloadHistory']);
         sendResponse({ 
           success: true, 
           downloads: downloads.downloadHistory || [] 
